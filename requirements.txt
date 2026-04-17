@@ -1,0 +1,6 @@
+﻿streamlit==1.56.0
+pandas==3.0.1
+numpy==1.26.4
+scikit-learn==1.8.0
+scikit-surprise==1.1.4
+pyvi==0.1.1

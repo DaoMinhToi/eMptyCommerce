@@ -1,0 +1,492 @@
+"""
+Module chứa logic core cho hệ thống gợi ý sản phẩm Hybrid
+Kết hợp Content-Based Filtering (TF-IDF) + Collaborative Filtering (SVD)
+
+Xử lý 2 trường hợp chính:
+1. Cold-Start Problem: Khách hàng mới (chưa có lịch sử) -> Dùng Content-Based 100%
+2. Warm-Start: Khách hàng cũ -> Kết hợp SVD (60%) + Content-Based (40%)
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from surprise import SVD, Dataset, Reader, KNNBasic
+import warnings
+import os
+
+warnings.filterwarnings("ignore")
+
+
+class HybridRecommender:
+    """
+    Lớp HybridRecommender - Hệ thống gợi ý sản phẩm Hybrid (Hybrid Recommendation System)
+    
+    Kết hợp hai phương pháp chính:
+    1. Content-Based Filtering: Gợi ý dựa trên độ tương đồng nội dung (mô tả sản phẩm)
+    2. Collaborative Filtering (SVD): Gợi ý dựa trên hành vi người dùng tương tự
+    
+    Xử lý Cold-Start Problem:
+    - Khách hàng mới không có lịch sử -> Sử dụng Content-Based 100%
+    - Khách hàng cũ -> Kết hợp cả 2 phương pháp
+    """
+    
+    def __init__(self):
+        """
+        Khởi tạo HybridRecommender.
+        
+        Các bước:
+        1. Đọc file data/clean_book_data.csv (thông tin sách)
+        2. Đọc file data/clean_reviews.csv (đánh giá của khách hàng)
+        3. Khởi tạo các biến để lưu mô hình
+        4. Tự động huấn luyện Content-Based và Collaborative mô hình
+        """
+        # Đọc dữ liệu từ file
+        self.book_data = None
+        self.reviews_data = None
+        
+        # Biến lưu mô hình
+        self.tfidf_vectorizer = None  # TF-IDF vectorizer
+        self.tfidf_matrix = None  # Ma trận TF-IDF của các sản phẩm
+        self.cosine_sim_matrix = None  # Ma trận độ tương đồng Cosine
+        self.svd_model = None  # Mô hình SVD cho Collaborative Filtering
+        self.knn_model = None  # Mô hình KNN cho Item-based Collaborative Filtering
+        self.reader = None  # Reader để load dữ liệu cho Surprise
+        self.trainset = None  # Trainset cho Surprise
+        
+        # Từ điển để ánh xạ product_id/customer_id với index
+        self.product_id_to_idx = {}
+        self.idx_to_product_id = {}
+        self.customer_id_to_idx = {}
+        self.idx_to_customer_id = {}
+        
+        # Tập khách hàng đã đánh giá (dùng kiểm tra Cold-Start)
+        self.known_customers = set()
+        self.known_products = set()
+        
+        print("🔄 Khởi tạo HybridRecommender...")
+        
+        # Bước 1: Đọc dữ liệu
+        self._load_data()
+        
+        # Bước 2: Huấn luyện mô hình (nếu dữ liệu có sẵn)
+        if self.book_data is not None and self.reviews_data is not None:
+            print("🔧 Huấn luyện mô hình...")
+            self.train_content_based()
+            self.train_collaborative()
+            print("✅ Khởi tạo hoàn tất!\n")
+    
+    def _load_data(self):
+        """
+        Đọc dữ liệu từ các file CSV.
+        
+        Đọc:
+        - data/clean_book_data.csv: Chứa product_id, title, category, cover_link, tokenized_desc
+        - data/clean_reviews.csv: Chứa customer_id, product_id, rating
+        """
+        try:
+            # Đọc dữ liệu sách
+            book_path = 'data/clean_book_data.csv'
+            if os.path.exists(book_path):
+                self.book_data = pd.read_csv(book_path).reset_index(drop=True)
+                self.known_products = set(self.book_data['product_id'].unique())
+                print(f"   ✓ Đọc {len(self.book_data)} sản phẩm từ {book_path}")
+            else:
+                print(f"   ⚠️  {book_path} không tìm thấy!")
+            
+            # Đọc dữ liệu đánh giá
+            reviews_path = 'data/clean_reviews.csv'
+            if os.path.exists(reviews_path):
+                self.reviews_data = pd.read_csv(reviews_path)
+                self.known_customers = set(self.reviews_data['customer_id'].unique())
+                print(f"   ✓ Đọc {len(self.reviews_data)} đánh giá từ {reviews_path}")
+            else:
+                print(f"   ⚠️  {reviews_path} không tìm thấy!")
+                
+        except Exception as e:
+            print(f"   ❌ Lỗi đọc dữ liệu: {e}")
+    
+    def train_content_based(self):
+        """
+        Huấn luyện mô hình Content-Based Filtering.
+        
+        Các bước:
+        1. Sử dụng TF-IDF (Term Frequency - Inverse Document Frequency) để chuyển đổi
+           các mô tả sản phẩm (tokenized_desc) thành vector số
+        2. Tính ma trận độ tương đồng giữa các sản phẩm bằng Cosine Similarity
+           (từ -1 đến 1, cao hơn = tương đồng hơn)
+        3. Lưu lại vectorizer và ma trận để dùng sau
+        
+        Công thức Cosine Similarity: cos(θ) = (A·B) / (||A|| * ||B||)
+        """
+        if self.book_data is None or 'tokenized_desc' not in self.book_data.columns:
+            print("   ⚠️  Không thể huấn luyện Content-Based: dữ liệu thiếu")
+            return
+        
+        try:
+            # Bước 1: Fit TF-IDF Vectorizer
+            self.tfidf_vectorizer = TfidfVectorizer(
+                max_features=500,  # Giới hạn 500 từ quan trọng nhất
+                ngram_range=(1, 2),  # Sử dụng unigram và bigram
+                min_df=2,  # Từ phải xuất hiện ít nhất 2 lần
+                max_df=0.8,  # Từ không xuất hiện quá 80% document
+                stop_words=None  # Không bỏ stopwords (vì text đã được xử lý)
+            )
+            
+            # Bước 2: Transform mô tả sản phẩm thành TF-IDF matrix
+            self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(
+                self.book_data['tokenized_desc'].fillna('')
+            )
+            
+            # Bước 3: Tính ma trận Cosine Similarity
+            self.cosine_sim_matrix = cosine_similarity(self.tfidf_matrix)
+            
+            # Bước 4: Tạo ánh xạ product_id <-> index
+            self.product_id_to_idx = {
+                pid: idx for idx, pid in enumerate(self.book_data['product_id'])
+            }
+            self.idx_to_product_id = {
+                idx: pid for pid, idx in self.product_id_to_idx.items()
+            }
+            
+            print(f"   ✓ Content-Based Filtering huấn luyện thành công!")
+            print(f"     - TF-IDF matrix shape: {self.tfidf_matrix.shape}")
+            print(f"     - Cosine similarity matrix shape: {self.cosine_sim_matrix.shape}")
+            
+        except Exception as e:
+            print(f"   ❌ Lỗi huấn luyện Content-Based: {e}")
+    
+    def train_collaborative(self):
+        """
+        Huấn luyện mô hình Collaborative Filtering (CF).
+        
+        Các bước:
+        1. Sử dụng thư viện Surprise (Python library cho Recommender Systems)
+        2. Định nghĩa Rating Scale (từ min đến max của rating)
+        3. Load dữ liệu (customer_id, product_id, rating) vào Dataset
+        4. Huấn luyện mô hình SVD (Singular Value Decomposition):
+           - SVD phân tích ma trận ratings thành 3 ma trận U, Σ, V^T
+           - Mục đích: Tìm latent factors (yếu tố ẩn) giải thích hành vi người dùng
+           - Công dụng: Dự đoán rating của (customer, product) chưa được đánh giá
+        
+        Lợi ích Collaborative Filtering:
+        - Phát hiện pattern giữa người dùng "tương tự" 
+        - Có thể gợi ý sản phẩm mới không có nội dung mô tả
+        """
+        if self.reviews_data is None:
+            print("   ⚠️  Không thể huấn luyện Collaborative Filtering: dữ liệu thiếu")
+            return
+        
+        try:
+            # Bước 1: Định nghĩa Rating Scale
+            rating_min = self.reviews_data['rating'].min()
+            rating_max = self.reviews_data['rating'].max()
+            
+            self.reader = Reader(rating_scale=(rating_min, rating_max))
+            
+            # Bước 2: Load dữ liệu
+            dataset = Dataset.load_from_df(
+                self.reviews_data[['customer_id', 'product_id', 'rating']],
+                reader=self.reader
+            )
+            
+            # Bước 3: Tạo trainset từ toàn bộ dữ liệu
+            self.trainset = dataset.build_full_trainset()
+            
+            # Bước 4: Huấn luyện SVD
+            self.svd_model = SVD(
+                n_factors=50,  # Số latent factors
+                n_epochs=40,  # Số epoch huấn luyện
+                lr_all=0.005,  # Learning rate
+                reg_all=0.02,  # Regularization parameter
+                random_state=42
+            )
+            self.svd_model.fit(self.trainset)
+            
+            # Bước 5: Tạo ánh xạ customer_id <-> inner_id (của Surprise)
+            self.customer_id_to_idx = {
+                cid: iid for iid, cid in enumerate(self.trainset.all_users())
+            }
+            
+            # Bước 6: Huấn luyện mô hình Item-based KNN
+            # KNN Item-based: Tìm các sản phẩm tương tự dựa trên hành vi người dùng
+            # user_based=False => Item-based (tương tự sản phẩm)
+            # user_based=True => User-based (tương tự người dùng)
+            # min_support: Yêu cầu ít nhất 2 người cùng đánh giá 2 item thì mới tính similarity
+            sim_options = {
+                'name': 'cosine', 
+                'user_based': False, 
+                'min_support': 2
+            }
+            self.knn_model = KNNBasic(sim_options=sim_options, random_state=42)
+            self.knn_model.fit(self.trainset)
+            
+            print(f"   ✓ Collaborative Filtering huấn luyện thành công!")
+            print(f"     - Số customers: {self.trainset.n_users}")
+            print(f"     - Số products: {self.trainset.n_items}")
+            print(f"     - Số ratings: {self.trainset.n_ratings}")
+            print(f"     - Rating scale: {rating_min} - {rating_max}")
+            print(f"   ✓ Item-based KNN huấn luyện thành công!")
+            
+        except Exception as e:
+            print(f"   ❌ Lỗi huấn luyện Collaborative Filtering: {e}")
+    
+    def get_content_based_recommendations(self, product_id, top_n=10):
+        """
+        Lấy danh sách sản phẩm tương tự dựa trên Content-Based Filtering.
+        
+        Các bước:
+        1. Tìm index (số thứ tự dòng) của product_id trong book_data DataFrame
+        2. Lấy mảng điểm tương đồng cosine của sản phẩm này với tất cả sản phẩm khác
+        3. Sắp xếp theo độ tương đồng giảm dần
+        4. Lấy top_n sản phẩm giống nhất (bỏ qua cuốn đầu tiên vì nó chính là cuốn đang xem)
+        5. Dùng .iloc để lấy data dựa trên số thứ tự dòng
+        
+        Args:
+            product_id (int): ID của sản phẩm tham chiếu
+            top_n (int): Số lượng sản phẩm gợi ý (mặc định: 10)
+        
+        Returns:
+            DataFrame: Dataframe gồm sách tương tự + cột 'similarity_score'
+        """
+        try:
+            # Bước 1: Tìm index (số thứ tự dòng) của cuốn sách có product_id tương ứng
+            idx = self.book_data[self.book_data['product_id'] == product_id].index[0]
+        except IndexError:
+            # Nếu không tìm thấy sách -> trả về DataFrame rỗng
+            return pd.DataFrame()
+        
+        # Bước 2: Lấy mảng điểm tương đồng cosine của sách này với tất cả sách khác
+        sim_scores = list(enumerate(self.cosine_sim_matrix[idx]))
+        
+        # Bước 3: Sắp xếp theo điểm tương đồng giảm dần
+        sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+        
+        # Bước 4: Lấy top_n cuốn sách giống nhất (bỏ qua cuốn đầu tiên vì nó chính là cuốn đang xem)
+        sim_scores = sim_scores[1:top_n+1]
+        
+        # Bước 5: Lấy ra index của các cuốn sách đó
+        book_indices = [i[0] for i in sim_scores]
+        scores = [i[1] for i in sim_scores]
+        
+        # Bước 6: Dùng .iloc để lấy data dựa trên số thứ tự dòng
+        result_df = self.book_data.iloc[book_indices].copy()
+        result_df['similarity_score'] = scores
+        
+        return result_df
+    
+    def get_hybrid_recommendations(self, customer_id, product_id_viewed=None, top_n=10,
+                                  content_weight=0.4, collab_weight=0.6):
+        """
+        LẤY DANH SÁCH GỢI Ý HYBRID - HÀM CHÍNH CỦA HỆ THỐNG
+        
+        Xử lý 2 trường hợp chính:
+        
+        TRƯỜNG HỢP 1: COLD-START PROBLEM (Khách hàng mới)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        - customer_id không tồn tại trong tập train (chưa đánh giá sản phẩm nào)
+        - Giải pháp: Sử dụng Content-Based 100%
+          * Nếu có product_id_viewed: Lấy sản phẩm tương tự
+          * Nếu không: Trả về top sản phẩm phổ biến nhất (dựa n_review)
+        
+        TRƯỜNG HỢP 2: WARM-START (Khách hàng cũ)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        - customer_id đã có lịch sử đánh giá
+        - Giải pháp: Kết hợp cả 2 phương pháp
+          * Dùng SVD dự đoán rating khách cho các sản phẩm chưa đánh giá
+          * Tính Content-Based similarity dựa trên sản phẩm khách yêu thích (rating cao)
+          * Kết hợp: Score_Hybrid = collab_weight * SVD_Score + content_weight * Content_Score
+          * Chỉ gợi ý sản phẩm chưa đánh giá (loại những sản phẩm đã xem)
+        
+        Args:
+            customer_id (int): ID của khách hàng
+            product_id_viewed (int, optional): ID sản phẩm đang xem (dùng cho Cold-Start)
+            top_n (int): Số lượng sản phẩm gợi ý (mặc định: 10)
+            content_weight (float): Trọng số Content-Based trong hybrid (0-1)
+            collab_weight (float): Trọng số Collaborative trong hybrid (0-1)
+        
+        Returns:
+            DataFrame: Dataframe chứa top N sản phẩm gợi ý
+                      [product_id, title, category, cover_link, hybrid_score]
+        """
+        # Kiểm tra trường hợp
+        is_cold_start = customer_id not in self.known_customers
+        
+        # ============ TRƯỜNG HỢP 1: COLD-START ============
+        if is_cold_start:
+            print(f"🆕 Cold-Start Problem: Khách hàng {customer_id} là người dùng mới")
+            print(f"   → Dùng Content-Based 100% để gợi ý")
+            
+            # Nếu khách đang xem 1 sản phẩm cụ thể
+            if product_id_viewed is not None and product_id_viewed in self.known_products:
+                print(f"   → Gợi ý dựa trên sản phẩm đang xem: {product_id_viewed}")
+                return self.get_content_based_recommendations(product_id_viewed, top_n)
+            
+            # Nếu không có sản phẩm tham chiếu -> Trả về sản phẩm phổ biến nhất
+            else:
+                print(f"   → Không có sản phẩm tham chiếu → Trả về sản phẩm phổ biến nhất")
+                popular_products = self.book_data.nlargest(top_n, 'n_review')[
+                    ['product_id', 'title', 'category', 'cover_link', 'n_review']
+                ].copy()
+                popular_products.rename(columns={'n_review': 'popularity_score'}, inplace=True)
+                return popular_products
+        
+        # ============ TRƯỜNG HỢP 2: WARM-START ============
+        else:
+            print(f"👥 Warm-Start: Khách hàng {customer_id} có lịch sử đánh giá")
+            print(f"   → Kết hợp SVD ({collab_weight*100:.0f}%) + Content-Based ({content_weight*100:.0f}%)")
+            
+            # Lấy sản phẩm khách đã đánh giá
+            customer_rated = set(
+                self.reviews_data[self.reviews_data['customer_id'] == customer_id]['product_id']
+            )
+            
+            # Lấy sản phẩm khách chưa đánh giá
+            all_products = set(self.book_data['product_id'].unique())
+            unrated_products = list(all_products - customer_rated)
+            
+            if not unrated_products:
+                print("   ⚠️  Khách đã đánh giá toàn bộ sản phẩm!")
+                return pd.DataFrame()
+            
+            # Tính SVD scores cho các sản phẩm chưa đánh giá
+            svd_scores = {}
+            for product_id in unrated_products:
+                try:
+                    pred = self.svd_model.predict(customer_id, product_id)
+                    svd_scores[product_id] = pred.est  # estimated rating
+                except:
+                    svd_scores[product_id] = 0  # Nếu predict fails
+            
+            # Tính Content-Based scores
+            # Dùng trung bình similarity của các sản phẩm khách yêu thích (rating >= 4)
+            high_rated = self.reviews_data[
+                (self.reviews_data['customer_id'] == customer_id) &
+                (self.reviews_data['rating'] >= 4)
+            ]['product_id'].tolist()
+            
+            content_scores = {}
+            for product_id in unrated_products:
+                if not high_rated or product_id not in self.product_id_to_idx:
+                    content_scores[product_id] = 0
+                else:
+                    # Tính trung bình similarity với các sản phẩm khách yêu thích
+                    similarities = []
+                    for ref_pid in high_rated:
+                        if ref_pid in self.product_id_to_idx:
+                            ref_idx = self.product_id_to_idx[ref_pid]
+                            prod_idx = self.product_id_to_idx[product_id]
+                            sim = self.cosine_sim_matrix[ref_idx][prod_idx]
+                            similarities.append(sim)
+                    
+                    content_scores[product_id] = np.mean(similarities) if similarities else 0
+            
+            # Kết hợp scores
+            hybrid_scores = {}
+            for product_id in unrated_products:
+                # Normalize scores về [0, 1]
+                normalized_svd = (svd_scores[product_id] - 1) / 4  # Rating là 1-5
+                normalized_svd = max(0, min(1, normalized_svd))  # Clip to [0, 1]
+                normalized_content = content_scores[product_id]  # Cosine sim đã là [0, 1]
+                
+                # Tính hybrid score
+                hybrid_scores[product_id] = (
+                    collab_weight * normalized_svd +
+                    content_weight * normalized_content
+                )
+            
+            # Sắp xếp và lấy top N
+            sorted_products = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+            
+            recommendations = []
+            for product_id, score in sorted_products:
+                product_info = self.book_data[self.book_data['product_id'] == product_id].iloc[0]
+                recommendations.append({
+                    'product_id': product_id,
+                    'title': product_info['title'],
+                    'category': product_info['category'],
+                    'cover_link': product_info['cover_link'],
+                    'hybrid_score': score,
+                    'svd_score': svd_scores[product_id],
+                    'content_score': content_scores[product_id]
+                })
+            
+            return pd.DataFrame(recommendations)
+    
+    def get_frequently_bought_together(self, product_id, top_n=5):
+        """
+        Tìm các sản phẩm hay được mua cùng nhau (Frequently Bought Together)
+        sử dụng Item-based KNN Collaborative Filtering.
+        
+        Ý tưởng:
+        - Dùng mô hình KNN tìm k sản phẩm gần nhất với sản phẩm tham chiếu
+        - "Gần nhất" được định nghĩa bằng cosine similarity trong không gian đánh giá
+        - Nếu nhiều người đánh giá sản phẩm A và sản phẩm B giống nhau,
+          thì A và B là những sản phẩm hay được mua cùng nhau
+        
+        Args:
+            product_id (int): ID sản phẩm tham chiếu
+            top_n (int): Số lượng sản phẩm liên quan (mặc định: 5)
+        
+        Returns:
+            DataFrame: Dataframe chứa các sản phẩm hay được mua cùng
+                      Hoặc DataFrame rỗng nếu sản phẩm không có trong tập train
+        
+        Ví dụ:
+        - Nếu người dùng xem cuốn "Python Programming"
+        - Hàm sẽ trả về những cuốn sách khác mà những người 
+          mua "Python Programming" cũng thường mua
+        """
+        try:
+            # Bước 1: Chuyển đổi product_id thành inner_id (mã số nội bộ của Surprise)
+            inner_product_id = self.knn_model.trainset.to_inner_iid(product_id)
+            
+            # Bước 2: Tìm k sản phẩm gần nhất (hàng xóm gần nhất)
+            neighbor_inner_ids = self.knn_model.get_neighbors(inner_product_id, k=top_n)
+            
+            # Bước 3: Chuyển đổi ngược lại thành product_id gốc
+            neighbor_product_ids = [
+                self.knn_model.trainset.to_raw_iid(inner_id) for inner_id in neighbor_inner_ids
+            ]
+            
+            # Bước 4: Lấy thông tin chi tiết từ book_data
+            frequently_bought = self.book_data[
+                self.book_data['product_id'].isin(neighbor_product_ids)
+            ].copy()
+            
+            # Bước 5: Loại bỏ cuốn sách người dùng đang xem (tránh gợi ý lại sách đang xem)
+            frequently_bought = frequently_bought[
+                frequently_bought['product_id'] != product_id
+            ].reset_index(drop=True)
+            
+            # Bước 6: Loại bỏ các cuốn sách bị trùng tên (keep='first' để giữ bản ghi đầu tiên)
+            frequently_bought = frequently_bought.drop_duplicates(
+                subset=['title'], 
+                keep='first'
+            ).reset_index(drop=True)
+            
+            # Bước 7: Thêm cột similarity score
+            similarity_scores = []
+            for prod_id in frequently_bought['product_id']:
+                inner_neighbor_id = self.knn_model.trainset.to_inner_iid(prod_id)
+                # Tính cosine similarity (dựa trên hàng xóm gần nhất)
+                sim = self.knn_model.sim[inner_product_id][inner_neighbor_id]
+                similarity_scores.append(sim)
+            
+            frequently_bought['knn_similarity_score'] = similarity_scores
+            
+            # Bước 8: Sắp xếp theo similarity score giảm dần
+            frequently_bought = frequently_bought.sort_values(
+                'knn_similarity_score', ascending=False
+            ).reset_index(drop=True)
+            
+            # Bước 9: Lấy đúng top_n cuốn sách sau khi đã lọc trùng
+            frequently_bought = frequently_bought.head(top_n)
+            
+            return frequently_bought
+            
+        except ValueError as e:
+            # Bắt lỗi nếu product_id không có trong tập train
+            print(f"⚠️  Lỗi: Sản phẩm {product_id} không tồn tại trong tập dữ liệu huấn luyện")
+            print(f"   Chi tiết: {e}")
+            return pd.DataFrame()  # Trả về DataFrame rỗng
