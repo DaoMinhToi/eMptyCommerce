@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from surprise import SVD, Dataset, Reader, KNNBasic
+from surprise import SVD, Dataset, Reader, KNNBasic, KNNWithMeans
 import warnings
 import os
 
@@ -64,17 +64,17 @@ class HybridRecommender:
         self.known_customers = set()
         self.known_products = set()
         
-        print("🔄 Khởi tạo HybridRecommender...")
+        print(" Khởi tạo HybridRecommender...")
         
         # Bước 1: Đọc dữ liệu
         self._load_data()
         
         # Bước 2: Huấn luyện mô hình (nếu dữ liệu có sẵn)
         if self.book_data is not None and self.reviews_data is not None:
-            print("🔧 Huấn luyện mô hình...")
+            print(" Huấn luyện mô hình...")
             self.train_content_based()
             self.train_collaborative()
-            print("✅ Khởi tạo hoàn tất!\n")
+            print(" Khởi tạo hoàn tất!\n")
     
     def _load_data(self):
         """
@@ -90,21 +90,21 @@ class HybridRecommender:
             if os.path.exists(book_path):
                 self.book_data = pd.read_csv(book_path).reset_index(drop=True)
                 self.known_products = set(self.book_data['product_id'].unique())
-                print(f"   ✓ Đọc {len(self.book_data)} sản phẩm từ {book_path}")
+                print(f"    Đọc {len(self.book_data)} sản phẩm từ {book_path}")
             else:
-                print(f"   ⚠️  {book_path} không tìm thấy!")
+                print(f"     {book_path} không tìm thấy!")
             
             # Đọc dữ liệu đánh giá
             reviews_path = 'data/clean_reviews.csv'
             if os.path.exists(reviews_path):
                 self.reviews_data = pd.read_csv(reviews_path)
                 self.known_customers = set(self.reviews_data['customer_id'].unique())
-                print(f"   ✓ Đọc {len(self.reviews_data)} đánh giá từ {reviews_path}")
+                print(f"    Đọc {len(self.reviews_data)} đánh giá từ {reviews_path}")
             else:
-                print(f"   ⚠️  {reviews_path} không tìm thấy!")
+                print(f"     {reviews_path} không tìm thấy!")
                 
         except Exception as e:
-            print(f"   ❌ Lỗi đọc dữ liệu: {e}")
+            print(f"    Lỗi đọc dữ liệu: {e}")
     
     def train_content_based(self):
         """
@@ -120,7 +120,7 @@ class HybridRecommender:
         Công thức Cosine Similarity: cos(θ) = (A·B) / (||A|| * ||B||)
         """
         if self.book_data is None or 'tokenized_desc' not in self.book_data.columns:
-            print("   ⚠️  Không thể huấn luyện Content-Based: dữ liệu thiếu")
+            print("     Không thể huấn luyện Content-Based: dữ liệu thiếu")
             return
         
         try:
@@ -149,12 +149,12 @@ class HybridRecommender:
                 idx: pid for pid, idx in self.product_id_to_idx.items()
             }
             
-            print(f"   ✓ Content-Based Filtering huấn luyện thành công!")
+            print(f"    Content-Based Filtering huấn luyện thành công!")
             print(f"     - TF-IDF matrix shape: {self.tfidf_matrix.shape}")
             print(f"     - Cosine similarity matrix shape: {self.cosine_sim_matrix.shape}")
             
         except Exception as e:
-            print(f"   ❌ Lỗi huấn luyện Content-Based: {e}")
+            print(f"    Lỗi huấn luyện Content-Based: {e}")
     
     def train_collaborative(self):
         """
@@ -174,7 +174,7 @@ class HybridRecommender:
         - Có thể gợi ý sản phẩm mới không có nội dung mô tả
         """
         if self.reviews_data is None:
-            print("   ⚠️  Không thể huấn luyện Collaborative Filtering: dữ liệu thiếu")
+            print("     Không thể huấn luyện Collaborative Filtering: dữ liệu thiếu")
             return
         
         try:
@@ -221,15 +221,15 @@ class HybridRecommender:
             self.knn_model = KNNBasic(sim_options=sim_options, random_state=42)
             self.knn_model.fit(self.trainset)
             
-            print(f"   ✓ Collaborative Filtering huấn luyện thành công!")
+            print(f"    Collaborative Filtering huấn luyện thành công!")
             print(f"     - Số customers: {self.trainset.n_users}")
             print(f"     - Số products: {self.trainset.n_items}")
             print(f"     - Số ratings: {self.trainset.n_ratings}")
             print(f"     - Rating scale: {rating_min} - {rating_max}")
-            print(f"   ✓ Item-based KNN huấn luyện thành công!")
+            print(f"    Item-based KNN huấn luyện thành công!")
             
         except Exception as e:
-            print(f"   ❌ Lỗi huấn luyện Collaborative Filtering: {e}")
+            print(f"    Lỗi huấn luyện Collaborative Filtering: {e}")
     
     def get_content_based_recommendations(self, product_id, top_n=10):
         """
@@ -314,7 +314,7 @@ class HybridRecommender:
         
         # ============ TRƯỜNG HỢP 1: COLD-START ============
         if is_cold_start:
-            print(f"🆕 Cold-Start Problem: Khách hàng {customer_id} là người dùng mới")
+            print(f" Cold-Start Problem: Khách hàng {customer_id} là người dùng mới")
             print(f"   → Dùng Content-Based 100% để gợi ý")
             
             # Nếu khách đang xem 1 sản phẩm cụ thể
@@ -333,7 +333,7 @@ class HybridRecommender:
         
         # ============ TRƯỜNG HỢP 2: WARM-START ============
         else:
-            print(f"👥 Warm-Start: Khách hàng {customer_id} có lịch sử đánh giá")
+            print(f" Warm-Start: Khách hàng {customer_id} có lịch sử đánh giá")
             print(f"   → Kết hợp SVD ({collab_weight*100:.0f}%) + Content-Based ({content_weight*100:.0f}%)")
             
             # Lấy sản phẩm khách đã đánh giá
@@ -346,7 +346,7 @@ class HybridRecommender:
             unrated_products = list(all_products - customer_rated)
             
             if not unrated_products:
-                print("   ⚠️  Khách đã đánh giá toàn bộ sản phẩm!")
+                print("     Khách đã đánh giá toàn bộ sản phẩm!")
                 return pd.DataFrame()
             
             # Tính SVD scores cho các sản phẩm chưa đánh giá
@@ -487,6 +487,161 @@ class HybridRecommender:
             
         except ValueError as e:
             # Bắt lỗi nếu product_id không có trong tập train
-            print(f"⚠️  Lỗi: Sản phẩm {product_id} không tồn tại trong tập dữ liệu huấn luyện")
+            print(f"  Lỗi: Sản phẩm {product_id} không tồn tại trong tập dữ liệu huấn luyện")
             print(f"   Chi tiết: {e}")
             return pd.DataFrame()  # Trả về DataFrame rỗng
+
+
+class KNNRecommender:
+    """
+    Item-based KNN Collaborative Filtering - Thuật toán gợi ý dựa trên sản phẩm tương tự
+    
+    Ý tưởng chính:
+    - Xác định mức độ tương đồng giữa các sản phẩm dựa trên hành vi của người dùng
+    - Nếu 2 sản phẩm được đánh giá tương tự bởi nhiều người dùng
+    - Thì 2 sản phẩm đó được coi là "tương tự" với nhau
+    - Dùng để gợi ý sản phẩm tương tự cho người dùng
+    
+    Ưu điểm:
+    - Không yêu cầu đặc điểm nội dung (chỉ cần rating)
+    - Có thể phát hiện được mối quan hệ phức tạp giữa sản phẩm
+    - Stable: Kết quả không thay đổi khi thêm người dùng mới
+    
+    Nhược điểm:
+    - Yêu cầu đủ dữ liệu đánh giá (sparse data problem)
+    - Khó áp dụng với sản phẩm mới (new item problem)
+    """
+    
+    def __init__(self, db_path='data/clean_reviews.csv'):
+        """
+        Khởi tạo KNN Recommender.
+        
+        Args:
+            db_path (str): Đường dẫn tới file CSV chứa dữ liệu đánh giá
+                         Cần có cột: customer_id, product_id, rating
+        """
+        self.db_path = db_path
+        self.model = None
+        self.trainset = None
+        self.reader = None
+    
+    def train(self):
+        """
+        Huấn luyện mô hình Item-based KNN.
+        
+        Các bước:
+        1. Đọc file dữ liệu đánh giá từ CSV
+        2. Định nghĩa Rating Scale (từ min đến max)
+        3. Load dữ liệu vào Surprise Dataset
+        4. Tạo trainset từ toàn bộ dữ liệu
+        5. Tạo mô hình KNNWithMeans với:
+           - k=20: Xét 20 sản phẩm hàng xóm gần nhất
+           - sim_options={'name': 'cosine', 'user_based': False}:
+             * cosine: Sử dụng cosine similarity
+             * user_based=False: Item-based (không phải user-based)
+        6. Huấn luyện mô hình
+        
+        Returns:
+            self: Trả về chính object này để dùng method chaining
+        """
+        try:
+            # Bước 1: Đọc dữ liệu
+            df = pd.read_csv(self.db_path)
+            
+            # Bước 2: Xác định Rating Scale
+            rating_min = df['rating'].min()
+            rating_max = df['rating'].max()
+            self.reader = Reader(rating_scale=(rating_min, rating_max))
+            
+            # Bước 3: Load dữ liệu vào Surprise
+            data = Dataset.load_from_df(
+                df[['customer_id', 'product_id', 'rating']], 
+                reader=self.reader
+            )
+            
+            # Bước 4: Tạo trainset
+            self.trainset = data.build_full_trainset()
+            
+            # Bước 5: Cấu hình Item-based KNN với cosine similarity
+            sim_options = {
+                'name': 'cosine',  # Sử dụng cosine similarity
+                'user_based': False,  # Item-based (không phải user-based)
+                'min_support': 2  # Ít nhất 2 người cùng đánh giá mới tính similarity
+            }
+            
+            # Bước 6: Tạo và huấn luyện mô hình
+            self.model = KNNWithMeans(k=20, sim_options=sim_options, verbose=False)
+            self.model.fit(self.trainset)
+            
+            print(" Item-based KNN huấn luyện thành công!")
+            print(f"  - Số customers: {self.trainset.n_users}")
+            print(f"  - Số products: {self.trainset.n_items}")
+            print(f"  - Số ratings: {self.trainset.n_ratings}")
+            print(f"  - Rating scale: {rating_min} - {rating_max}")
+            
+            return self
+            
+        except Exception as e:
+            print(f" Lỗi khi huấn luyện KNN: {e}")
+            return self
+    
+    def get_recommendations(self, customer_id, n=10):
+        """
+        Lấy danh sách gợi ý TOP-N sản phẩm cho một khách hàng.
+        
+        Quy trình:
+        1. Tìm tất cả sản phẩm khách hàng chưa đánh giá (chưa xem)
+        2. Dự đoán rating của khách cho từng sản phẩm chưa xem bằng KNN
+           (Dựa trên rating của các sản phẩm tương tự)
+        3. Sắp xếp theo rating dự đoán giảm dần
+        4. Lấy top-N sản phẩm có rating dự đoán cao nhất
+        
+        Args:
+            customer_id (int): ID khách hàng cần gợi ý
+            n (int): Số lượng sản phẩm gợi ý (mặc định: 10)
+        
+        Returns:
+            list: Danh sách tuple (product_id, estimated_rating)
+                  Ví dụ: [(101, 4.5), (102, 4.3), ...]
+        """
+        if self.model is None:
+            print(" Mô hình chưa được huấn luyện. Đang huấn luyện...")
+            self.train()
+        
+        # Bước 1: Đọc dữ liệu
+        df = pd.read_csv(self.db_path)
+        
+        # Bước 2: Lấy sản phẩm khách đã đánh giá
+        rated_products = set(
+            df[df['customer_id'] == customer_id]['product_id'].tolist()
+        )
+        
+        # Bước 3: Lấy toàn bộ sản phẩm
+        all_products = set(df['product_id'].unique())
+        
+        # Bước 4: Xác định sản phẩm chưa xem
+        unrated_products = list(all_products - rated_products)
+        
+        if not unrated_products:
+            print(f" Khách hàng {customer_id} đã đánh giá tất cả sản phẩm!")
+            return []
+        
+        # Bước 5: Dự đoán rating cho mỗi sản phẩm chưa xem
+        predictions = []
+        for product_id in unrated_products:
+            try:
+                # Sử dụng mô hình để dự đoán
+                pred = self.model.predict(customer_id, product_id, verbose=False)
+                predictions.append((product_id, pred.est))
+            except Exception as e:
+                # Bỏ qua sản phẩm nếu có lỗi
+                print(f"  ⚠️ Không thể dự đoán sản phẩm {product_id}: {e}")
+                continue
+        
+        # Bước 6: Sắp xếp theo rating dự đoán giảm dần
+        predictions.sort(key=lambda x: x[1], reverse=True)
+        
+        # Bước 7: Lấy top-N
+        recommendations = predictions[:n]
+        
+        return recommendations
