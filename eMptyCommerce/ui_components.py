@@ -15,6 +15,7 @@ def render_search_bar(session_state):
     with h2:
         header_input = st.text_input(
             "search",
+            value=session_state.get('search_query', ''),
             placeholder="🔍  Nhập tên sách để tìm nội dung tương tự...",
             key="header_input_box",
             label_visibility="collapsed"

@@ -222,6 +222,12 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # Callback để reset thanh tìm kiếm khi thay đổi kịch bản
+    def reset_search_on_customer_type_change():
+        st.session_state.search_query = ''
+        st.session_state.do_search = False
+        st.session_state.last_input = ''
+    
     # Scenario selection - cleaner label
     st.markdown("**🎯 Chọn kịch bản**")
     customer_type = st.radio(
@@ -231,8 +237,10 @@ with st.sidebar:
             st.session_state.customer_type
         ),
         key="customer_type_radio",
+        on_change=reset_search_on_customer_type_change,
         label_visibility="collapsed"
     )
+    
     st.session_state.customer_type = customer_type
     
     if customer_type == "👥 Khách hàng cũ":
@@ -421,9 +429,17 @@ if st.session_state.get("show_comparison", False):
     os.chdir(APP_DIR)
     
     try:
+        # Tạo header với nút đóng
+        col_title, col_close = st.columns([20, 1])
+        with col_title:
+            st.subheader("📊 So sánh hiệu năng các mô hình")
+        with col_close:
+            if st.button("✕", key="close_comparison_btn", help="Đóng bảng so sánh"):
+                st.session_state.show_comparison = False
+                st.rerun()
+        
         df_compare, rmse_knn, mae_knn, rmse_cf, rmse_hybrid, mae_cf, mae_hybrid = create_comparison_table()
         
-        st.subheader("📊 So sánh hiệu năng các mô hình")
         st.dataframe(df_compare, hide_index=True, use_container_width=True)
         
         st.caption("💡 **Giải thích:**")
