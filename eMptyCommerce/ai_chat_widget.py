@@ -265,31 +265,73 @@ def display_ai_message_with_images(ai_response):
         ai_response: Text phản hồi từ AI
     """
     # Hiển thị text của AI
-    st.write(f"**eMpTy AI:** {ai_response[:150]}..." if len(ai_response) > 150 else f"**eMpTy AI:** {ai_response}")
+    st.write(f"**eMpTy AI:** {ai_response}")
     
-    # Tìm các tiêu đề sách trong response (các text trong ngoặc kép)
-    # Pattern: "Tên Sách" hoặc Tên Sách
-    pattern = r'"([^"]{5,})"'  # Tìm text trong ngoặc kép, dài từ 5 ký tự trở lên
-    book_titles = re.findall(pattern, ai_response)
+    # Tìm các tiêu đề sách trong response (hỗ trợ cả ngoặc kép thẳng, ngoặc kép cong, ngoặc đơn)
+    pattern = r'["“\'‘]([^"“”\'‘’]{4,})["”\'’]'
+    candidates = re.findall(pattern, ai_response)
     
-    # Lấy hình ảnh cho mỗi sách
-    if book_titles:
-        st.markdown("#### 📚 Sách được đề cập:")
-        
-        # Tạo grid hiển thị sách
-        cols = st.columns(2)
-        book_count = 0
-        
-        for title in book_titles[:4]:  # Giới hạn 4 sách
-            # Lọc bỏ những title không phải tên sách
-            if len(title) > 5 and title.lower() not in ['của', 'tác giả', 'author', 'một cuốn']:
-                img_url = get_book_image(title)
+    # Một số cụm từ phổ biến không phải là tên sách cần loại bỏ
+    exclude_words = {
+        'empty ai', 'empty', 'mình', 'bạn', 'sách', 'truyện', 'truyện tranh', 
+        'trinh thám', 'sách trinh thám', 'tiểu thuyết', 'tác giả', 'của hàng',
+        'hệ thống', 'sản phẩm', 'người dùng'
+    }
+    
+    valid_books = []
+    df = load_book_data()
+    
+    if candidates and df is not None:
+        for title in candidates:
+            title_clean = title.strip()
+            # Bỏ qua nếu từ khóa quá ngắn hoặc nằm trong danh sách loại trừ
+            if len(title_clean) < 4 or title_clean.lower() in exclude_words:
+                continue
                 
-                if img_url:
-                    with cols[book_count % 2]:
-                        with st.container(border=True):
-                            st.image(img_url, use_container_width=True, caption=title[:30])
-                            book_count += 1
+            # Tìm sách trong CSDL (tìm kiếm tương đối / chứa từ khóa)
+            mask = df['title'].str.lower().str.contains(title_clean.lower(), na=False)
+            matches = df[mask]
+            
+            if len(matches) > 0:
+                # Tránh trùng lặp sách đã thêm
+                book_id = matches.iloc[0]['product_id']
+                if not any(b['product_id'] == book_id for b in valid_books):
+                    valid_books.append({
+                        'product_id': book_id,
+                        'title': matches.iloc[0]['title'],
+                        'cover_link': matches.iloc[0].get('cover_link', None),
+                        'category': matches.iloc[0].get('category', 'N/A')
+                    })
+            if len(valid_books) >= 4:  # Giới hạn tối đa 4 cuốn sách
+                break
+
+    # Chỉ hiển thị phần Sách đề cập nếu thực sự tìm thấy sách khớp trong CSDL
+    if valid_books:
+        st.markdown("#### 📚 Sách có tại cửa hàng:")
+        cols = st.columns(2)
+        for idx, book in enumerate(valid_books):
+            title = book['title']
+            cover = book['cover_link']
+            category = book['category']
+            
+            # Kiểm tra ảnh bìa hợp lệ
+            if isinstance(cover, str) and cover.startswith('http'):
+                img_html = f'<img src="{cover}" style="width:100%;height:140px;object-fit:cover;border-radius:6px;">'
+            else:
+                img_html = '<div style="width:100%;height:140px;background:#f0f0f0;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:36px;">📚</div>'
+            
+            with cols[idx % 2]:
+                st.markdown(f"""
+                <div style="border:1px solid #e0e0e0;border-radius:8px;padding:8px;background:white;margin-bottom:8px;text-align:center;box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                    {img_html}
+                    <div style="font-size:11px;font-weight:600;color:#1a1a2e;margin-top:6px;min-height:30px;line-height:1.2;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;">
+                        {title}
+                    </div>
+                    <div style="font-size:9px;color:#888;margin-top:2px;font-style:italic;">
+                        📂 {category}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
 
 def render_simple_floating_button():

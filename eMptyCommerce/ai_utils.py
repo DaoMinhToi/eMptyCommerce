@@ -22,7 +22,7 @@ def init_gemini_api():
             genai.configure(api_key=gemini_api_key)
             # Tìm model khả dụng
             _detect_available_model()
-            return True
+            return _AVAILABLE_MODEL is not None
         else:
             print("⚠️ GEMINI_API_KEY không được tìm thấy trong .streamlit/secrets.toml")
             return False
@@ -48,7 +48,13 @@ def _detect_available_model():
                 print(f"✅ Phát hiện model khả dụng: {model_id}")
                 return
     except Exception as e:
+        error_msg = str(e).lower()
         print(f"⚠️ Lỗi khi list models: {str(e)}")
+        # Nếu lỗi liên quan đến API Key không hợp lệ hoặc hết hạn, không thử fallback
+        if "api_key_invalid" in error_msg or "expired" in error_msg or "invalid" in error_msg or "unauthorized" in error_msg or "key" in error_msg:
+            print("❌ API Key không hợp lệ hoặc đã hết hạn. Dừng phát hiện model.")
+            _AVAILABLE_MODEL = None
+            return
     
     # Fallback: thử danh sách các model phổ biến
     print("⚠️ Fallback: thử danh sách model...")
@@ -77,6 +83,56 @@ def get_available_model():
     if _AVAILABLE_MODEL is None:
         _detect_available_model()
     return _AVAILABLE_MODEL
+
+
+def update_gemini_api_key(new_key):
+    """
+    Cập nhật GEMINI_API_KEY mới vào file .streamlit/secrets.toml và cấu hình lại API
+    
+    Args:
+        new_key (str): Key mới được nhập từ giao diện
+    Returns:
+        bool: True nếu cấu hình thành công, False nếu không
+    """
+    global _AVAILABLE_MODEL
+    import os
+    try:
+        new_key = new_key.strip()
+        # 1. Cấu hình lại API ngay lập tức để kiểm tra
+        genai.configure(api_key=new_key)
+        
+        # Kiểm tra xem key mới có hoạt động không bằng cách list models
+        try:
+            models_list = list(genai.list_models())
+            found_model = False
+            for m in models_list:
+                if 'generateContent' in m.supported_generation_methods:
+                    _AVAILABLE_MODEL = m.name.replace('models/', '')
+                    found_model = True
+                    break
+            if not found_model:
+                _AVAILABLE_MODEL = "gemini-pro"
+        except Exception as e:
+            print(f"⚠️ Thử cấu hình key mới thất bại: {e}")
+            _AVAILABLE_MODEL = None
+            return False
+            
+        # 2. Nếu key hoạt động tốt, ghi đè vào file secrets.toml
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        path1 = os.path.join(current_dir, ".streamlit", "secrets.toml")
+        path2 = os.path.join(os.path.dirname(current_dir), ".streamlit", "secrets.toml")
+        
+        for path in [path1, path2]:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f'# Cấu hình API Key cho Gemini AI\nGEMINI_API_KEY = "{new_key}"\n')
+            print(f"✅ Đã ghi API Key vào {path}")
+            
+        return True
+    except Exception as e:
+        print(f"⚠️ Lỗi khi cập nhật file secrets.toml: {e}")
+        return False
+
 
 
 # ==================== HÀM TRỢ LỰC AI TƯ VẤN SÁCH ====================
@@ -137,8 +193,8 @@ def get_ai_response(user_message, chat_history, gemini_available=True):
         # Kiểm tra các loại lỗi thông thường
         if "429" in error_msg or "quota" in error_msg.lower():
             return "❌ **Hạn chế API:** Đã vượt quá giới hạn sử dụng Gemini API. Vui lòng chờ một chút rồi thử lại, hoặc nâng cấp gói tại [Google AI Studio](https://aistudio.google.com/apikey)"
-        elif "401" in error_msg or "unauthorized" in error_msg.lower():
-            return "❌ **Lỗi xác thực:** API Key không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra .streamlit/secrets.toml"
+        elif "401" in error_msg or "unauthorized" in error_msg.lower() or "400" in error_msg or "expired" in error_msg.lower() or "invalid" in error_msg.lower():
+            return "❌ **Lỗi xác thực:** API Key không hợp lệ hoặc đã hết hạn. Vui lòng cập nhật API Key mới trong phần Cấu hình AI ở thanh bên hoặc kiểm tra .streamlit/secrets.toml"
         elif "403" in error_msg:
             return "❌ **Lỗi quyền hạn:** API Key không có quyền truy cập. Vui lòng kiểm tra quyền trong Google Cloud Console"
         else:

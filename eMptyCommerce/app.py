@@ -64,9 +64,18 @@ if 'do_search' not in st.session_state:
 if 'last_input' not in st.session_state:
     st.session_state.last_input = ''
 
+# ==================== ĐỌC THÔNG TIN TỪ URL QUERY PARAMS ====================
+init_customer_type = st.query_params.get("customer_type", "🆕 Khách hàng mới (Cold-Start)")
+init_customer_id = st.query_params.get("customer_id", None)
+if init_customer_id is not None:
+    try:
+        init_customer_id = int(init_customer_id)
+    except ValueError:
+        init_customer_id = None
+
 # Khởi tạo session_state cho loại khách hàng
 if 'customer_type' not in st.session_state:
-    st.session_state.customer_type = "🆕 Khách hàng mới (Cold-Start)"
+    st.session_state.customer_type = init_customer_type
 
 # ==================== KHỞI TẠO SESSION STATE CHO CHAT AI ====================
 # Lịch sử cuộc trò chuyện với AI Trợ lý tư vấn sách
@@ -75,7 +84,7 @@ if 'messages' not in st.session_state:
 
 # Ghi nhận ID khách hàng hiện tại để detect khi người dùng thay đổi
 if 'current_customer_id' not in st.session_state:
-    st.session_state.current_customer_id = None
+    st.session_state.current_customer_id = init_customer_id
 
 # Lưu trạng thái Gemini API vào session_state
 st.session_state.gemini_available = GEMINI_AVAILABLE
@@ -252,6 +261,10 @@ with st.sidebar:
         # ==================== XÓA CHAT KHI ĐỔI KỊCH BẢN ====================
         st.session_state.messages = []
         st.session_state.current_customer_id = None
+        # Cập nhật URL query params
+        st.query_params["customer_type"] = st.session_state.customer_type_radio
+        if "customer_id" in st.query_params:
+            del st.query_params["customer_id"]
     
     # Scenario selection - cleaner label
     st.markdown("**🎯 Chọn kịch bản**")
@@ -267,6 +280,7 @@ with st.sidebar:
     )
     
     st.session_state.customer_type = customer_type
+    st.query_params["customer_type"] = customer_type
     
     if customer_type == "👥 Khách hàng cũ":
         # ==================== CALLBACK KHI ĐỔI CUSTOMER ID ====================
@@ -275,20 +289,30 @@ with st.sidebar:
             if new_customer_id != st.session_state.current_customer_id:
                 st.session_state.messages = []
                 st.session_state.current_customer_id = new_customer_id
+                st.query_params["customer_id"] = str(new_customer_id)
         
+        # Xác định index mặc định từ session_state
+        default_index = 0
+        if st.session_state.current_customer_id in unique_customers:
+            default_index = unique_customers.index(st.session_state.current_customer_id)
+            
         selected_customer = st.selectbox(
             "🔑 Đăng nhập với ID Khách hàng:",
             unique_customers,
+            index=default_index,
             format_func=lambda x: customer_dict[x],
             key="customer_selectbox",
             on_change=on_customer_change
         )
         
-        # Cập nhật current_customer_id
+        # Cập nhật current_customer_id và query_params
         st.session_state.current_customer_id = selected_customer
+        st.query_params["customer_id"] = str(selected_customer)
     else:
         selected_customer = None
         st.session_state.current_customer_id = None
+        if "customer_id" in st.query_params:
+            del st.query_params["customer_id"]
     
     st.markdown("---")
     
